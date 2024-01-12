@@ -8,3 +8,7 @@ Download all files in the folder on Box.com, including subfolders.
 npm install
 npm start "https://app.box.com/..."
 ```
+
+## License
+
+[MIT License](LICENSE)
