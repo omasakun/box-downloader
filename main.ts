@@ -1,25 +1,18 @@
 import { mkdir, writeFile } from 'fs/promises'
 import { dirname, sep } from 'path'
-import puppeteer, { HTTPRequest, Browser, Page } from 'puppeteer'
 import { argv } from 'process'
-
-const target = argv[2]
-const maxRetry = 10
-
-// const browser = await puppeteer.launch({ headless: false, slowMo: 500 })
-const browser = await puppeteer.launch({ headless: 'new' })
-const page = await browser.newPage()
-
-// @ts-ignore https://github.com/puppeteer/puppeteer/issues/6647#issuecomment-1610949415
-await page._client().send('Network.enable', {
-  maxResourceBufferSize: 1024 * 1204 * 100,
-  maxTotalBufferSize: 1024 * 1204 * 200,
-})
+import puppeteer, { HTTPRequest } from 'puppeteer'
 
 interface Entry {
   path: string
   url: string
 }
+
+const target = argv[2]
+const maxRetry = 10
+
+const browser = await puppeteer.launch({ headless: 'new' })
+const page = await browser.newPage()
 
 const folders: Entry[] = []
 const files: Entry[] = []
@@ -32,21 +25,16 @@ function addItem(item: Item, prefix: string) {
   }
 }
 
+increaseResourceBufferSize()
 ;(await scrapeFolder(target)).forEach((item) => addItem(item, ''))
 
 while (folders.length > 0) {
   const { path, url } = folders.shift() ?? error()
 
-  for (let retry = 1; retry <= maxRetry; retry++) {
-    try {
-      const items = await scrapeFolder(url)
-      items.forEach((item) => addItem(item, path + sep))
-      break
-    } catch (e) {
-      if (retry === maxRetry) throw e
-      console.log(`retry ${retry} / ${maxRetry}`)
-    }
-  }
+  await runWithRetry(async () => {
+    const items = await scrapeFolder(url)
+    items.forEach((item) => addItem(item, path + sep))
+  }, maxRetry)
 }
 
 while (files.length > 0) {
@@ -54,17 +42,11 @@ while (files.length > 0) {
   const { path, url } = files.shift() ?? error()
   const savePath = 'download' + sep + path
 
-  for (let retry = 1; retry <= maxRetry; retry++) {
-    try {
-      const buffer = await scrapeFile(url)
-      await mkdir(dirname(savePath), { recursive: true })
-      await writeFile(savePath, buffer)
-      break
-    } catch (e) {
-      if (retry === maxRetry) throw e
-      console.log(`retry ${retry} / ${maxRetry}`)
-    }
-  }
+  await runWithRetry(async () => {
+    const buffer = await scrapeFile(url)
+    await mkdir(dirname(savePath), { recursive: true })
+    await writeFile(savePath, buffer)
+  }, maxRetry)
 }
 
 await browser.close()
@@ -102,6 +84,26 @@ function typeFromUrl(url: string): Item['type'] {
   if (url.match(/\/file\/\d+$/)) return 'file'
   if (url.match(/\/folder\/\d+$/)) return 'folder'
   error('unknown type')
+}
+
+async function runWithRetry<T>(fn: () => Promise<T>, maxRetry: number): Promise<T> {
+  for (let retry = 1; retry <= maxRetry; retry++) {
+    try {
+      return await fn()
+    } catch (e) {
+      if (retry === maxRetry) throw e
+      console.log(`retry ${retry} / ${maxRetry}`)
+    }
+  }
+  throw new Error('unreachable')
+}
+
+async function increaseResourceBufferSize() {
+  // @ts-ignore https://github.com/puppeteer/puppeteer/issues/6647#issuecomment-1610949415
+  await page._client().send('Network.enable', {
+    maxResourceBufferSize: 1024 * 1204 * 100,
+    maxTotalBufferSize: 1024 * 1204 * 200,
+  })
 }
 
 async function scrapeFolder(target: string): Promise<Item[]> {
